@@ -1,0 +1,73 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: always
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: fa_db
+      MYSQL_USER: fa_user
+      MYSQL_PASSWORD: fa_pass
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  face-app:
+    build: ./app   # your Dockerfile with DeepFace + RTSP main.py
+    container_name: face-app
+    depends_on:
+      - mysql
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DB: fa_db
+      MYSQL_USER: fa_user
+      MYSQL_PASSWORD: fa_pass
+      SOURCE: webcam
+      WEBCAM_INDEX: 0
+      RTSP_URL: rtsp://62.109.19.230:554/myanee
+    devices:
+    - /dev/video0:/dev/video0
+    ports:
+    - "5000:5000"
+    volumes:
+      - ./app:/app
+
+  superset:
+    build: ./superset  # assuming Dockerfile is in ./superset; adjust if needed
+    container_name: superset
+    restart: always
+    depends_on:
+      - mysql
+    environment:
+      SUPERSET_SECRET_KEY: "superset_secret"
+      SUPERSET_ADMIN_USERNAME: admin
+      SUPERSET_ADMIN_PASSWORD: admin
+      SUPERSET_ADMIN_FIRST_NAME: Superset
+      SUPERSET_ADMIN_LAST_NAME: Admin
+      SUPERSET_ADMIN_EMAIL: admin@superset.com
+    ports:
+      - "8088:8088"
+    command:
+      - /bin/sh
+      - -c
+      - >
+        superset db upgrade &&
+        (superset fab create-admin
+          --username $$SUPERSET_ADMIN_USERNAME
+          --firstname $$SUPERSET_ADMIN_FIRST_NAME
+          --lastname $$SUPERSET_ADMIN_LAST_NAME
+          --email $$SUPERSET_ADMIN_EMAIL
+          --password $$SUPERSET_ADMIN_PASSWORD || true) &&
+        superset init &&
+        superset run -h 0.0.0.0 -p 8088 --with-threads --reload --debugger
+    volumes:
+      - superset_data:/app/superset_home  # Optional: persist Superset config/data
+
+volumes:
+  mysql_data:
+  superset_data:

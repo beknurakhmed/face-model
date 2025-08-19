@@ -1,0 +1,8 @@
+deepface==0.0.95
+opencv-python-headless==4.10.0.84
+tensorflow==2.19.1
+tf-keras==2.19.0
+numpy==1.26.4
+pandas==2.2.3
+SQLAlchemy==2.0.36
+pymysql==1.1.1
