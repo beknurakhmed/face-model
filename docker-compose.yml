@@ -27,11 +27,10 @@ services:
       MYSQL_DB: fa_db
       MYSQL_USER: fa_user
       MYSQL_PASSWORD: fa_pass
-      SOURCE: webcam
+      SOURCE: rtsp
       WEBCAM_INDEX: 0
-      RTSP_URL: rtsp://62.109.19.230:554/myanee
-    devices:
-    - /dev/video0:/dev/video0
+      VIDEO_FILE: /app/test.mp4
+      RTSP_URL: rtsp://streams:147852Soap@82.215.78.50:554/Streaming/Channels/101
     ports:
     - "5000:5000"
     volumes:

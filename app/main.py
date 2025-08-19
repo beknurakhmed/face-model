@@ -2,15 +2,15 @@ import os
 import time
 import argparse
 import datetime as dt
-
 import cv2
 from deepface import DeepFace
 from sqlalchemy import create_engine, text
 
 # ---------- CLI ----------
-parser = argparse.ArgumentParser(description="Face analytics (RTSP/Webcam → MySQL)")
-parser.add_argument("--source", choices=["rtsp", "webcam"], default=os.getenv("SOURCE", "rtsp"))
+parser = argparse.ArgumentParser(description="Face analytics (RTSP/Webcam/Video → MySQL)")
+parser.add_argument("--source", choices=["rtsp", "webcam", "video"], default=os.getenv("SOURCE", "rtsp"))
 parser.add_argument("--rtsp-url", default=os.getenv("RTSP_URL", ""))
+parser.add_argument("--video-file", default=os.getenv("VIDEO_FILE", "fallback.mp4"))
 parser.add_argument("--device", type=int, default=int(os.getenv("WEBCAM_INDEX", "0")))
 parser.add_argument("--interval", type=float, default=float(os.getenv("INTERVAL_SEC", "1.0")))
 parser.add_argument("--display", action="store_true", help="Show window (host only; not in headless docker)")
@@ -23,8 +23,10 @@ MYSQL_DB   = os.getenv("MYSQL_DB", "face_analytics")
 MYSQL_USER = os.getenv("MYSQL_USER", "fa_user")
 MYSQL_PWD  = os.getenv("MYSQL_PASSWORD", "fa_pass")
 
-# engine = create_engine(f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PWD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}?charset=utf8mb4")
-engine = create_engine("mysql+pymysql://fa_user:fa_pass@127.0.0.1:3306/fa_db")
+RESIZE_WIDTH = int(os.getenv("RESIZE_WIDTH", "640"))
+RESIZE_HEIGHT = int(os.getenv("RESIZE_HEIGHT", "480"))
+
+engine = create_engine(f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PWD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}?charset=utf8mb4")
 
 with engine.begin() as conn:
     conn.execute(text("""
@@ -41,33 +43,39 @@ with engine.begin() as conn:
     """))
 
 # ---------- Video ----------
-if args.source == "webcam":
-    cap = cv2.VideoCapture(args.device, cv2.CAP_ANY)
-else:
-    if not args.rtsp_url:
-        raise SystemExit("RTSP URL required (set --rtsp-url or RTSP_URL env).")
-    # hint: forcing FFMPEG often helps with RTSP
-    cap = cv2.VideoCapture(args.rtsp_url, cv2.CAP_FFMPEG)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+def open_video_source():
+    cap = None
+    if args.source == "webcam":
+        cap = cv2.VideoCapture(args.device, cv2.CAP_ANY)
+    elif args.source == "rtsp" and args.rtsp_url:
+        cap = cv2.VideoCapture(args.rtsp_url + "?tcp", cv2.CAP_FFMPEG)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
+    if cap is None or not cap.isOpened():
+        print(f"⚠️ Could not open {args.source}. Falling back to video file: {args.video_file}")
+        if not os.path.isfile(args.video_file):
+            raise SystemExit(f"❌ Video file not found: {args.video_file}")
+        cap = cv2.VideoCapture(args.video_file)
+        if not cap.isOpened():
+            raise SystemExit(f"❌ Could not open video file: {args.video_file}")
+    return cap
 
-
-if not cap.isOpened():
-    raise SystemExit("❌ Could not open video source")
-
+cap = open_video_source()
 print("✅ Video source opened. Press 'q' to quit (if display enabled).")
 
 last_t = 0.0
 while True:
     ok, frame = cap.read()
     if not ok or frame is None:
-        print("⚠️ No frame received from stream. Re-trying...")
-        time.sleep(0.2)
+        print("⚠️ No frame received. Re-trying...")
+        time.sleep(0.1)
         continue
+
+    # Resize frame for faster processing
+    frame = cv2.resize(frame, (RESIZE_WIDTH, RESIZE_HEIGHT))
 
     now = time.time()
     if now - last_t < args.interval:
-        # skip analysis until interval elapsed
         if args.display:
             cv2.imshow("Face Analytics", frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -86,10 +94,8 @@ while True:
         print("Analysis error:", e)
         continue
 
-    # DeepFace can return dict or list of dicts
     faces = analysis if isinstance(analysis, list) else [analysis] if analysis else []
 
-    # insert into DB
     if faces:
         ts = dt.datetime.utcnow()
         src_label = args.source
@@ -108,19 +114,16 @@ while True:
                 "w": int(reg.get("w") or 0),
                 "h": int(reg.get("h") or 0),
             })
-
         if rows:
-            # bulk insert
             with engine.begin() as conn:
                 conn.execute(
                     text("""
                         INSERT INTO faces (ts, source, face_index, age, gender, emotion, x, y, w, h)
                         VALUES (:ts, :source, :face_index, :age, :gender, :emotion, :x, :y, :w, :h)
                     """),
-                    rows  # SQLAlchemy handles bulk with list of dicts
+                    rows
                 )
 
-    # optional overlay
     if args.display:
         for face in faces:
             reg = face.get("region", {})
